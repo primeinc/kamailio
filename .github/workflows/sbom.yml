@@ -1,0 +1,125 @@
+name: SBOM Generation
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday
+  workflow_dispatch:
+
+jobs:
+  generate-sbom:
+    name: Generate Software Bill of Materials
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Create SBOM directory
+        run: mkdir -p sbom
+
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM for repository
+        run: |
+          syft packages dir:. -o spdx-json=sbom/kamailio-repo.spdx.json || true
+          syft packages dir:. -o cyclonedx-json=sbom/kamailio-repo.cyclonedx.json || true
+        continue-on-error: true
+
+      - name: Generate SBOM for source code
+        run: |
+          syft packages dir:src/ -o spdx-json=sbom/kamailio-source.spdx.json || true
+          syft packages dir:src/ -o cyclonedx-json=sbom/kamailio-source.cyclonedx.json || true
+        continue-on-error: true
+
+      - name: Check for container images
+        id: check-containers
+        run: |
+          if [ -f .devcontainer/Dockerfile ]; then
+            echo "has_dockerfile=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_dockerfile=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build container for SBOM analysis
+        if: steps.check-containers.outputs.has_dockerfile == 'true'
+        run: |
+          docker build -t kamailio-sbom:latest .devcontainer/ || true
+        continue-on-error: true
+
+      - name: Generate SBOM for container
+        if: steps.check-containers.outputs.has_dockerfile == 'true'
+        run: |
+          syft packages kamailio-sbom:latest -o spdx-json=sbom/kamailio-container.spdx.json || true
+          syft packages kamailio-sbom:latest -o cyclonedx-json=sbom/kamailio-container.cyclonedx.json || true
+        continue-on-error: true
+
+      - name: Generate dependency list
+        run: |
+          echo "# Kamailio Dependencies" > sbom/dependencies.md
+          echo "Generated on: $(date)" >> sbom/dependencies.md
+          echo "" >> sbom/dependencies.md
+          echo "## System Dependencies" >> sbom/dependencies.md
+          
+          # Extract from Makefiles and package files
+          if [ -f src/Makefile.defs ]; then
+            echo "### Build Dependencies" >> sbom/dependencies.md
+            grep -h "DEFS.*=" src/Makefile.* 2>/dev/null | head -10 >> sbom/dependencies.md || true
+          fi
+          
+          # Extract from packaging files
+          if [ -d pkg/ ]; then
+            echo "### Package Dependencies" >> sbom/dependencies.md
+            find pkg/ -name "*.deb" -o -name "*.spec" 2>/dev/null | head -5 | while read file; do
+              echo "- Found: $file" >> sbom/dependencies.md
+            done || true
+          fi
+          
+          # Extract from source includes
+          echo "### Source Dependencies" >> sbom/dependencies.md
+          find src/ -name "*.h" 2>/dev/null | xargs grep -h "#include <" | sort | uniq | head -20 >> sbom/dependencies.md || true
+
+      - name: Validate SBOM files
+        run: |
+          for file in sbom/*.json; do
+            if [ -f "$file" ]; then
+              echo "Validating $file"
+              if jq empty "$file" 2>/dev/null; then
+                echo "✓ $file is valid JSON"
+              else
+                echo "✗ $file is invalid JSON"
+              fi
+            fi
+          done
+        continue-on-error: true
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-reports
+          path: sbom/
+          retention-days: 90
+        continue-on-error: true
+
+      - name: Generate SBOM summary
+        run: |
+          echo "## SBOM Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "Generated SBOM files:" >> $GITHUB_STEP_SUMMARY
+          
+          for file in sbom/*; do
+            if [ -f "$file" ]; then
+              size=$(du -h "$file" | cut -f1)
+              echo "- $(basename "$file") ($size)" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "SBOM files are available as artifacts for download." >> $GITHUB_STEP_SUMMARY

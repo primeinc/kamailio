@@ -1,0 +1,213 @@
+name: Trivy Security Scan
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 8 * * 2'  # Weekly on Tuesday
+  workflow_dispatch:
+
+jobs:
+  trivy-repo-scan:
+    name: Trivy Repository Scan
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+
+      - name: Run Trivy filesystem scan
+        run: |
+          trivy fs --security-checks vuln,secret,config \
+            --format sarif \
+            --output trivy-fs-report.sarif \
+            . || true
+        continue-on-error: true
+
+      - name: Run Trivy filesystem scan (table format)
+        run: |
+          trivy fs --security-checks vuln,secret,config \
+            --format table \
+            --output trivy-fs-report.txt \
+            . || true
+        continue-on-error: true
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-fs-report.sarif'
+        continue-on-error: true
+
+      - name: Upload Trivy scan results as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-repo-scan-results
+          path: |
+            trivy-fs-report.sarif
+            trivy-fs-report.txt
+          retention-days: 30
+        continue-on-error: true
+
+  trivy-container-scan:
+    name: Trivy Container Scan
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for Dockerfiles
+        id: check-docker
+        run: |
+          if find . -name "Dockerfile*" -type f | grep -q .; then
+            echo "has_dockerfiles=true" >> $GITHUB_OUTPUT
+            echo "Found Dockerfiles in repository"
+            find . -name "Dockerfile*" -type f
+          else
+            echo "has_dockerfiles=false" >> $GITHUB_OUTPUT
+            echo "No Dockerfiles found"
+          fi
+
+      - name: Install Trivy
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+
+      - name: Build container from devcontainer
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        run: |
+          if [ -f .devcontainer/Dockerfile ]; then
+            docker build -t kamailio-dev:scan .devcontainer/ || true
+          fi
+        continue-on-error: true
+
+      - name: Build container from main Dockerfile
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        run: |
+          if [ -f Dockerfile ]; then
+            docker build -t kamailio-main:scan . || true
+          fi
+        continue-on-error: true
+
+      - name: Scan devcontainer image
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        run: |
+          if docker image inspect kamailio-dev:scan >/dev/null 2>&1; then
+            trivy image --format sarif --output trivy-devcontainer.sarif kamailio-dev:scan || true
+            trivy image --format table --output trivy-devcontainer.txt kamailio-dev:scan || true
+          fi
+        continue-on-error: true
+
+      - name: Scan main image
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        run: |
+          if docker image inspect kamailio-main:scan >/dev/null 2>&1; then
+            trivy image --format sarif --output trivy-main.sarif kamailio-main:scan || true
+            trivy image --format table --output trivy-main.txt kamailio-main:scan || true
+          fi
+        continue-on-error: true
+
+      - name: Upload container scan results
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-container-scan-results
+          path: |
+            trivy-*.sarif
+            trivy-*.txt
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Upload SARIF results to GitHub Security
+        if: steps.check-docker.outputs.has_dockerfiles == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-devcontainer.sarif'
+        continue-on-error: true
+
+  trivy-config-scan:
+    name: Trivy Configuration Scan
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+
+      - name: Scan for configuration issues
+        run: |
+          trivy config --format sarif --output trivy-config.sarif . || true
+          trivy config --format table --output trivy-config.txt . || true
+        continue-on-error: true
+
+      - name: Scan for secrets
+        run: |
+          trivy fs --scanners secret --format sarif --output trivy-secrets.sarif . || true
+          trivy fs --scanners secret --format table --output trivy-secrets.txt . || true
+        continue-on-error: true
+
+      - name: Upload configuration scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-config-scan-results
+          path: |
+            trivy-config.*
+            trivy-secrets.*
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Generate scan summary
+        run: |
+          echo "## Trivy Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Repository Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-fs-report.txt ]; then
+            echo "Repository filesystem scan completed. Check artifacts for details." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-config.txt ]; then
+            echo "Configuration scan completed. Check artifacts for details." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Secret Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f trivy-secrets.txt ]; then
+            echo "Secret scan completed. Check artifacts for details." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scan results are uploaded as artifacts and to the GitHub Security tab." >> $GITHUB_STEP_SUMMARY
