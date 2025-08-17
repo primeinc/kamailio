@@ -13,3 +13,15 @@ updates:
       interval: weekly
     commit-message:
       prefix: "github: [skip ci]"
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "docker: [skip ci]"
+  - package-ecosystem: "docker"
+    directory: "/src/modules/rtp_media_server/docker"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "docker: [skip ci]"

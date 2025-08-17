@@ -1,0 +1,150 @@
+name: Hadolint Docker Linting
+
+on:
+  push:
+    branches: [ main, master ]
+    paths: 
+      - '**/Dockerfile*'
+      - '.github/workflows/hadolint.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths: 
+      - '**/Dockerfile*'
+      - '.github/workflows/hadolint.yml'
+  workflow_dispatch:
+
+jobs:
+  hadolint:
+    name: Lint Dockerfiles
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Find Dockerfiles
+        id: find-dockerfiles
+        run: |
+          dockerfiles=$(find . -name "Dockerfile*" -type f | tr '\n' ' ')
+          if [ -n "$dockerfiles" ]; then
+            echo "dockerfiles=$dockerfiles" >> $GITHUB_OUTPUT
+            echo "has_dockerfiles=true" >> $GITHUB_OUTPUT
+            echo "Found Dockerfiles: $dockerfiles"
+          else
+            echo "has_dockerfiles=false" >> $GITHUB_OUTPUT
+            echo "No Dockerfiles found"
+          fi
+
+      - name: Install Hadolint
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        run: |
+          wget -O hadolint https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x hadolint
+          sudo mv hadolint /usr/local/bin/
+
+      - name: Create Hadolint config
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        run: |
+          cat > .hadolint.yaml << EOF
+          failure-threshold: warning
+          ignored:
+            - DL3008  # Pin versions in apt get install
+            - DL3009  # Delete apt cache
+            - DL3015  # Avoid additional packages by specifying --no-install-recommends
+            - SC2086  # Double quote to prevent globbing
+          trusted-registries:
+            - docker.io
+            - mcr.microsoft.com
+            - ghcr.io
+          EOF
+
+      - name: Lint Dockerfiles
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        run: |
+          mkdir -p hadolint-results
+          
+          for dockerfile in ${{ steps.find-dockerfiles.outputs.dockerfiles }}; do
+            echo "Linting $dockerfile"
+            dockerfile_name=$(basename "$dockerfile" | tr '/' '_')
+            
+            # Run hadolint and capture output
+            hadolint "$dockerfile" --format json > "hadolint-results/${dockerfile_name}.json" || true
+            hadolint "$dockerfile" --format sarif > "hadolint-results/${dockerfile_name}.sarif" || true
+            hadolint "$dockerfile" > "hadolint-results/${dockerfile_name}.txt" || true
+            
+            echo "Results for $dockerfile:" >> hadolint-summary.txt
+            hadolint "$dockerfile" >> hadolint-summary.txt || true
+            echo "----------------------------------------" >> hadolint-summary.txt
+          done
+
+      - name: Upload Hadolint results
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hadolint-results
+          path: |
+            hadolint-results/
+            hadolint-summary.txt
+          retention-days: 30
+
+      - name: Upload SARIF results to GitHub Security
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: hadolint-results/
+        continue-on-error: true
+
+      - name: Check for critical issues
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        run: |
+          critical_count=0
+          
+          for dockerfile in ${{ steps.find-dockerfiles.outputs.dockerfiles }}; do
+            dockerfile_name=$(basename "$dockerfile" | tr '/' '_')
+            
+            if [ -f "hadolint-results/${dockerfile_name}.json" ]; then
+              # Count error level issues
+              errors=$(jq '[.[] | select(.level == "error")] | length' "hadolint-results/${dockerfile_name}.json" 2>/dev/null || echo "0")
+              critical_count=$((critical_count + errors))
+              
+              echo "Dockerfile $dockerfile has $errors error(s)"
+            fi
+          done
+          
+          echo "Total critical issues: $critical_count"
+          
+          if [ $critical_count -gt 0 ]; then
+            echo "::warning::Found $critical_count critical Dockerfile issues. Check the artifacts for details."
+          else
+            echo "::notice::No critical Dockerfile issues found."
+          fi
+
+      - name: Generate summary
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'true'
+        run: |
+          echo "## Hadolint Docker Linting Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Dockerfiles Analyzed:" >> $GITHUB_STEP_SUMMARY
+          for dockerfile in ${{ steps.find-dockerfiles.outputs.dockerfiles }}; do
+            echo "- \`$dockerfile\`" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results:" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f hadolint-summary.txt ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            cat hadolint-summary.txt >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Detailed results are available in the artifacts." >> $GITHUB_STEP_SUMMARY
+
+      - name: No Dockerfiles found
+        if: steps.find-dockerfiles.outputs.has_dockerfiles == 'false'
+        run: |
+          echo "## Hadolint Docker Linting" >> $GITHUB_STEP_SUMMARY
+          echo "No Dockerfiles found in the repository. Skipping Hadolint analysis." >> $GITHUB_STEP_SUMMARY

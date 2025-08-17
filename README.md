@@ -1,6 +1,9 @@
 # Kamailio - The Open Source SIP Server
 
 [![Build Status](https://github.com/kamailio/kamailio/actions/workflows/main.yml/badge.svg)](https://github.com/kamailio/kamailio/actions)
+[![CodeQL](https://github.com/kamailio/kamailio/actions/workflows/codeql.yml/badge.svg)](https://github.com/kamailio/kamailio/actions/workflows/codeql.yml)
+[![CI Lint Test](https://github.com/kamailio/kamailio/actions/workflows/ci-lint-test.yml/badge.svg)](https://github.com/kamailio/kamailio/actions/workflows/ci-lint-test.yml)
+[![Security Scan](https://github.com/kamailio/kamailio/actions/workflows/trivy-scan.yml/badge.svg)](https://github.com/kamailio/kamailio/actions/workflows/trivy-scan.yml)
 [![Code Triage Badge](https://www.codetriage.com/kamailio/kamailio/badges/users.svg)](https://www.codetriage.com/kamailio/kamailio)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
 
@@ -48,6 +51,8 @@ New contributions to the core and several main modules (auth, corex, sl, tls, tm
 
 ## Documentation
 
+### Official Documentation
+
 The main index for documentation is available at:
 
   * https://www.kamailio.org/w/documentation/
@@ -61,6 +66,17 @@ The wiki collects a consistent number of tutorials, the indexes for variables, f
   * https://www.kamailio.org/wikidocs/
 
 Please read the README file in the source code, one per module.
+
+### Project Documentation
+
+This repository includes comprehensive project documentation:
+
+  * [**Repository Overview**](docs/repo-overview.md) - Technical stack, components, and structure
+  * [**Architecture Guide**](docs/architecture.md) - System design, data flow, and module interactions  
+  * [**Security Review**](docs/security-review.md) - Security assessment, threat model, and hardening recommendations
+  * [**Testing Strategy**](docs/testing-strategy.md) - Test coverage, frameworks, and quality assurance approach
+  * [**Technical Debt Backlog**](docs/tech-debt.md) - Prioritized improvements and modernization roadmap
+  * [**Operational Readiness**](docs/operational-readiness.md) - Deployment, configuration, and maintenance guide
 
 ### Installation
 
